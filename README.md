@@ -18,7 +18,7 @@ Et interaktivt Streamlit-interface til at eksperimentere med Mistral AI's nye Mi
 ## 📋 Forudsætninger
 
 ### Hardware
-- **GPU:** NVIDIA GPU med mindst 16GB VRAM (24GB+ anbefales for alle modeller)
+- **GPU:** NVIDIA GPU med mindst 16GB VRAM (24GB+ anbefales for 14B modellen)
 - **RAM:** Minimum 8GB system RAM
 
 ### Software
@@ -39,7 +39,7 @@ curl -fsSL https://ollama.com/install.sh | sh
 # Vælg én eller flere modeller efter dit VRAM budget:
 ollama pull ministral-3:3b   # ~13GB VRAM - Hurtigst
 ollama pull ministral-3:8b   # ~16GB VRAM - Balanceret
-ollama pull ministral-3:14b  # ~14GB VRAM - Bedst kvalitet
+ollama pull ministral-3:14b  # ~19GB VRAM - Bedst kvalitet
 ```
 
 ### 3. Klon dette repository
@@ -112,7 +112,7 @@ OLLAMA_KEEP_ALIVE=-1 ollama serve
 |-------|------|-----------|----------|
 | Ministral 3B | ~13GB | ~360 tok/s | God |
 | Ministral 8B | ~16GB | ~240 tok/s | Meget god |
-| Ministral 14B | ~14GB | ~40 tok/s | Bedst |
+| Ministral 14B | ~19GB | ~40 tok/s | Bedst |
 
 *Hastigheder målt på RTX 5090. Din performance vil variere.
 
