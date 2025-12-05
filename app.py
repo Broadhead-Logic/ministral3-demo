@@ -5,6 +5,7 @@ import streamlit as st
 import requests
 import json
 import time
+import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Ollama API configuration
@@ -97,6 +98,40 @@ def chat_completion(model, messages, options):
         return {"error": str(e)}
 
 
+def encode_image(uploaded_file):
+    """Encode uploaded image to base64 for Ollama vision API"""
+    return base64.b64encode(uploaded_file.getvalue()).decode('utf-8')
+
+
+def stream_vision_chat(model, prompt, image_base64, options):
+    """Stream vision chat response from Ollama API"""
+    url = f"{OLLAMA_BASE_URL}/api/chat"
+    payload = {
+        "model": model,
+        "messages": [{
+            "role": "user",
+            "content": prompt,
+            "images": [image_base64]
+        }],
+        "stream": True,
+        "options": options
+    }
+
+    try:
+        with requests.post(url, json=payload, stream=True, timeout=300) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if line:
+                    data = json.loads(line)
+                    if "message" in data:
+                        yield data
+                    if data.get("done", False):
+                        yield data
+                        break
+    except requests.exceptions.RequestException as e:
+        yield {"error": str(e)}
+
+
 def init_session_state():
     """Initialize session state variables"""
     if "messages" not in st.session_state:
@@ -107,6 +142,8 @@ def init_session_state():
         st.session_state.custom_presets = {}
     if "comparison_results" not in st.session_state:
         st.session_state.comparison_results = None
+    if "vision_history" not in st.session_state:
+        st.session_state.vision_history = []
 
 
 def render_sidebar():
@@ -360,6 +397,119 @@ def render_comparison_tab(system_prompt, options):
         st.session_state.comparison_results = results
 
 
+def render_vision_tab(model, options):
+    """Render the vision/multimodal tab"""
+    st.header("🖼️ Vision")
+    st.caption("Upload et billede og stil spørgsmål om det - Ministral 3 modellerne er multimodale!")
+
+    # Image upload
+    uploaded_file = st.file_uploader(
+        "Upload billede",
+        type=["png", "jpg", "jpeg", "webp"],
+        help="Understøttede formater: PNG, JPG, JPEG, WEBP"
+    )
+
+    if uploaded_file is not None:
+        # Display uploaded image
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            st.image(uploaded_file, caption="Uploaded billede", use_container_width=True)
+
+        with col2:
+            # Preset vision prompts
+            vision_presets = {
+                "Custom": "",
+                "Beskriv billedet": "Beskriv hvad du ser på dette billede i detaljer.",
+                "Identificer objekter": "Identificer og list alle objekter du kan se på billedet.",
+                "Læs tekst": "Læs og transskriber al tekst der er synlig på billedet.",
+                "Analyser stemning": "Analyser stemningen og atmosfæren i dette billede.",
+            }
+
+            selected_vision_preset = st.selectbox(
+                "Vælg prompt type",
+                list(vision_presets.keys())
+            )
+
+            default_prompt = vision_presets.get(selected_vision_preset, "")
+
+            vision_prompt = st.text_area(
+                "Dit spørgsmål om billedet",
+                value=default_prompt,
+                height=100,
+                placeholder="Skriv dit spørgsmål om billedet her..."
+            )
+
+            analyze_button = st.button("🔍 Analyser billede", use_container_width=True)
+
+        if analyze_button and vision_prompt:
+            st.divider()
+
+            # Encode image
+            image_base64 = encode_image(uploaded_file)
+
+            # Stream response
+            with st.chat_message("assistant"):
+                message_placeholder = st.empty()
+                stats_placeholder = st.empty()
+
+                full_response = ""
+                completion_tokens = 0
+                start_time = time.time()
+
+                for chunk in stream_vision_chat(model, vision_prompt, image_base64, options):
+                    if "error" in chunk:
+                        st.error(f"Fejl: {chunk['error']}")
+                        break
+
+                    if "message" in chunk:
+                        content = chunk["message"].get("content", "")
+                        full_response += content
+                        message_placeholder.markdown(full_response + "▌")
+
+                    if chunk.get("done", False):
+                        completion_tokens = chunk.get("eval_count", 0)
+
+                elapsed = time.time() - start_time
+                speed = completion_tokens / elapsed if elapsed > 0 else 0
+
+                message_placeholder.markdown(full_response)
+                stats_placeholder.caption(
+                    f"📊 {completion_tokens} tokens | "
+                    f"⚡ {speed:.1f} tok/s | "
+                    f"⏱️ {elapsed:.1f}s"
+                )
+
+                # Save to history
+                st.session_state.vision_history.append({
+                    "image_name": uploaded_file.name,
+                    "prompt": vision_prompt,
+                    "response": full_response,
+                    "model": model,
+                    "stats": {
+                        "tokens": completion_tokens,
+                        "speed": f"{speed:.1f}",
+                        "time": f"{elapsed:.1f}"
+                    }
+                })
+
+                # Update token counter
+                st.session_state.total_tokens["completion"] += completion_tokens
+
+    # Display vision history
+    if st.session_state.vision_history:
+        st.divider()
+        st.subheader("📜 Vision historik")
+        for idx, entry in enumerate(reversed(st.session_state.vision_history[-5:])):
+            with st.expander(f"🖼️ {entry['image_name']} - {entry['model']}"):
+                st.markdown(f"**Prompt:** {entry['prompt']}")
+                st.markdown(f"**Svar:** {entry['response']}")
+                st.caption(
+                    f"📊 {entry['stats']['tokens']} tokens | "
+                    f"⚡ {entry['stats']['speed']} tok/s | "
+                    f"⏱️ {entry['stats']['time']}s"
+                )
+
+
 def main():
     """Main application"""
     st.set_page_config(
@@ -380,12 +530,15 @@ def main():
     model, system_prompt, options, preset_text = render_sidebar()
 
     # Main content with tabs
-    tab1, tab2 = st.tabs(["💬 Chat", "🔄 Sammenligning"])
+    tab1, tab2, tab3 = st.tabs(["💬 Chat", "🖼️ Vision", "🔄 Sammenligning"])
 
     with tab1:
         render_chat_tab(model, system_prompt, options, preset_text)
 
     with tab2:
+        render_vision_tab(model, options)
+
+    with tab3:
         render_comparison_tab(system_prompt, options)
 
 
